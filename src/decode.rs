@@ -15,6 +15,7 @@ use crate::header::Header;
 use crate::pixel::{Pixel, SupportedChannels};
 use crate::types::Channels;
 use crate::utils::{cold, unlikely};
+use crate::State;
 
 const QOI_OP_INDEX_END: u8 = QOI_OP_INDEX | 0x3f;
 const QOI_OP_RUN_END: u8 = QOI_OP_RUN | 0x3d; // <- note, 0x3d (not 0x3f)
@@ -22,7 +23,9 @@ const QOI_OP_DIFF_END: u8 = QOI_OP_DIFF | 0x3f;
 const QOI_OP_LUMA_END: u8 = QOI_OP_LUMA | 0x3f;
 
 #[inline]
-fn decode_impl_slice<const N: usize, const RGBA: bool>(data: &[u8], out: &mut [u8]) -> Result<usize>
+fn decode_impl_slice<const N: usize, const RGBA: bool>(
+    state: &mut State, data: &[u8], out: &mut [u8],
+) -> Result<usize>
 where
     Pixel<N>: SupportedChannels,
     [u8; N]: Pod,
@@ -31,17 +34,15 @@ where
     let data_len = data.len();
     let mut data = data;
 
-    let mut index = [Pixel::<4>::new(); 256];
-    let mut px = Pixel::<N>::new().with_a(0xff);
-    let mut px_rgba: Pixel<4>;
+    let index = &mut state.index;
+    let px = &mut state.px_prev;
 
     while let [px_out, ptail @ ..] = pixels {
         pixels = ptail;
         match data {
             [b1 @ QOI_OP_INDEX..=QOI_OP_INDEX_END, dtail @ ..] => {
-                px_rgba = index[*b1 as usize];
-                px.update(px_rgba);
-                *px_out = px.into();
+                *px = index[*b1 as usize];
+                *px_out = (*px).into();
                 data = dtail;
                 continue;
             }
@@ -54,10 +55,10 @@ where
                 data = dtail;
             }
             [b1 @ QOI_OP_RUN..=QOI_OP_RUN_END, dtail @ ..] => {
-                *px_out = px.into();
+                *px_out = (*px).into();
                 let run = ((b1 & 0x3f) as usize).min(pixels.len());
                 let (phead, ptail) = pixels.split_at_mut(run); // can't panic
-                phead.fill(px.into());
+                phead.fill((*px).into());
                 pixels = ptail;
                 data = dtail;
                 continue;
@@ -77,10 +78,8 @@ where
                 }
             }
         }
-
-        px_rgba = px.as_rgba(0xff);
-        index[px_rgba.hash_index() as usize] = px_rgba;
-        *px_out = px.into();
+        index[px.hash_index() as usize] = *px;
+        *px_out = (*px).into();
     }
 
     if unlikely(data.len() < QOI_PADDING_SIZE) {
@@ -94,13 +93,13 @@ where
 
 #[inline]
 fn decode_impl_slice_all(
-    data: &[u8], out: &mut [u8], channels: u8, src_channels: u8,
+    state: &mut State, data: &[u8], out: &mut [u8], channels: u8, src_channels: u8,
 ) -> Result<usize> {
     match (channels, src_channels) {
-        (3, 3) => decode_impl_slice::<3, false>(data, out),
-        (3, 4) => decode_impl_slice::<3, true>(data, out),
-        (4, 3) => decode_impl_slice::<4, false>(data, out),
-        (4, 4) => decode_impl_slice::<4, true>(data, out),
+        (3, 3) => decode_impl_slice::<3, false>(state, data, out),
+        (3, 4) => decode_impl_slice::<3, true>(state, data, out),
+        (4, 3) => decode_impl_slice::<4, false>(state, data, out),
+        (4, 4) => decode_impl_slice::<4, true>(state, data, out),
         _ => {
             cold();
             Err(Error::InvalidChannels { channels })
@@ -140,7 +139,7 @@ pub fn decode_header(data: impl AsRef<[u8]>) -> Result<Header> {
 #[cfg(any(feature = "std"))]
 #[inline]
 fn decode_impl_stream<R: Read, const N: usize, const RGBA: bool>(
-    data: &mut R, out: &mut [u8],
+    state: &mut State, data: &mut R, out: &mut [u8],
 ) -> Result<()>
 where
     Pixel<N>: SupportedChannels,
@@ -148,8 +147,8 @@ where
 {
     let mut pixels = cast_slice_mut::<_, [u8; N]>(out);
 
-    let mut index = [Pixel::<N>::new(); 256];
-    let mut px = Pixel::<N>::new().with_a(0xff);
+    let index = &mut state.index;
+    let px = &mut state.px_prev;
 
     while let [px_out, ptail @ ..] = pixels {
         pixels = ptail;
@@ -158,8 +157,8 @@ where
         let [b1] = p;
         match b1 {
             QOI_OP_INDEX..=QOI_OP_INDEX_END => {
-                px = index[b1 as usize];
-                *px_out = px.into();
+                *px = index[b1 as usize];
+                *px_out = (*px).into();
                 continue;
             }
             QOI_OP_RGB => {
@@ -173,10 +172,10 @@ where
                 px.update_rgba(p[0], p[1], p[2], p[3]);
             }
             QOI_OP_RUN..=QOI_OP_RUN_END => {
-                *px_out = px.into();
+                *px_out = (*px).into();
                 let run = ((b1 & 0x3f) as usize).min(pixels.len());
                 let (phead, ptail) = pixels.split_at_mut(run); // can't panic
-                phead.fill(px.into());
+                phead.fill((*px).into());
                 pixels = ptail;
                 continue;
             }
@@ -194,8 +193,8 @@ where
             }
         }
 
-        index[px.hash_index() as usize] = px;
-        *px_out = px.into();
+        index[px.hash_index() as usize] = *px;
+        *px_out = (*px).into();
     }
 
     let mut p = [0_u8; QOI_PADDING_SIZE];
@@ -210,13 +209,13 @@ where
 #[cfg(feature = "std")]
 #[inline]
 fn decode_impl_stream_all<R: Read>(
-    data: &mut R, out: &mut [u8], channels: u8, src_channels: u8,
+    state: &mut State, data: &mut R, out: &mut [u8], channels: u8, src_channels: u8,
 ) -> Result<()> {
     match (channels, src_channels) {
-        (3, 3) => decode_impl_stream::<_, 3, false>(data, out),
-        (3, 4) => decode_impl_stream::<_, 3, true>(data, out),
-        (4, 3) => decode_impl_stream::<_, 4, false>(data, out),
-        (4, 4) => decode_impl_stream::<_, 4, true>(data, out),
+        (3, 3) => decode_impl_stream::<_, 3, false>(state, data, out),
+        (3, 4) => decode_impl_stream::<_, 3, true>(state, data, out),
+        (4, 3) => decode_impl_stream::<_, 4, false>(state, data, out),
+        (4, 4) => decode_impl_stream::<_, 4, true>(state, data, out),
         _ => {
             cold();
             Err(Error::InvalidChannels { channels })
@@ -227,7 +226,9 @@ fn decode_impl_stream_all<R: Read>(
 #[doc(hidden)]
 pub trait Reader: Sized {
     fn decode_header(&mut self) -> Result<Header>;
-    fn decode_image(&mut self, out: &mut [u8], channels: u8, src_channels: u8) -> Result<()>;
+    fn decode_image(
+        &mut self, state: &mut State, out: &mut [u8], channels: u8, src_channels: u8,
+    ) -> Result<()>;
 }
 
 pub struct Bytes<'a>(&'a [u8]);
@@ -253,8 +254,10 @@ impl<'a> Reader for Bytes<'a> {
     }
 
     #[inline]
-    fn decode_image(&mut self, out: &mut [u8], channels: u8, src_channels: u8) -> Result<()> {
-        let n_read = decode_impl_slice_all(self.0, out, channels, src_channels)?;
+    fn decode_image(
+        &mut self, state: &mut State, out: &mut [u8], channels: u8, src_channels: u8,
+    ) -> Result<()> {
+        let n_read = decode_impl_slice_all(state, self.0, out, channels, src_channels)?;
         self.0 = &self.0[n_read..];
         Ok(())
     }
@@ -270,8 +273,10 @@ impl<R: Read> Reader for R {
     }
 
     #[inline]
-    fn decode_image(&mut self, out: &mut [u8], channels: u8, src_channels: u8) -> Result<()> {
-        decode_impl_stream_all(self, out, channels, src_channels)
+    fn decode_image(
+        &mut self, state: &mut State, out: &mut [u8], channels: u8, src_channels: u8,
+    ) -> Result<()> {
+        decode_impl_stream_all(state, self, out, channels, src_channels)
     }
 }
 
@@ -281,6 +286,7 @@ pub struct Decoder<R> {
     reader: R,
     header: Header,
     channels: Channels,
+    state: State,
 }
 
 impl<'a> Decoder<Bytes<'a>> {
@@ -291,9 +297,13 @@ impl<'a> Decoder<Bytes<'a>> {
     /// Note: this provides the most efficient decoding, but requires the source data to
     /// be loaded in memory in order to decode it. In order to decode from a generic
     /// stream, use [`Decoder::from_stream`] instead.
-    #[inline]
+    /// #[inline]
     pub fn new(data: &'a (impl AsRef<[u8]> + ?Sized)) -> Result<Self> {
-        Self::new_impl(Bytes::new(data.as_ref()))
+        Self::new_with(State::default(), data)
+    }
+    #[inline]
+    pub fn new_with(state: State, data: &'a (impl AsRef<[u8]> + ?Sized)) -> Result<Self> {
+        Self::new_impl(state, Bytes::new(data.as_ref()))
     }
 
     /// Returns the undecoded tail of the input slice of bytes.
@@ -313,7 +323,11 @@ impl<R: Read> Decoder<R> {
     /// would be more efficient to use a specialized constructor instead: [`Decoder::new`].
     #[inline]
     pub fn from_stream(reader: R) -> Result<Self> {
-        Self::new_impl(reader)
+        Self::from_stream_with(State::default(), reader)
+    }
+    #[inline]
+    pub fn from_stream_with(state: State, reader: R) -> Result<Self> {
+        Self::new_impl(state, reader)
     }
 
     /// Returns an immutable reference to the underlying reader.
@@ -332,9 +346,9 @@ impl<R: Read> Decoder<R> {
 
 impl<R: Reader> Decoder<R> {
     #[inline]
-    fn new_impl(mut reader: R) -> Result<Self> {
+    fn new_impl(state: State, mut reader: R) -> Result<Self> {
         let header = reader.decode_header()?;
-        Ok(Self { reader, header, channels: header.channels })
+        Ok(Self { reader, header, channels: header.channels, state })
     }
 
     /// Returns a new decoder with modified number of channels.
@@ -381,7 +395,12 @@ impl<R: Reader> Decoder<R> {
         if unlikely(buf.len() < size) {
             return Err(Error::OutputBufferTooSmall { size: buf.len(), required: size });
         }
-        self.reader.decode_image(buf, self.channels.as_u8(), self.header.channels.as_u8())?;
+        self.reader.decode_image(
+            &mut self.state,
+            buf,
+            self.channels.as_u8(),
+            self.header.channels.as_u8(),
+        )?;
         Ok(size)
     }
 
@@ -392,5 +411,9 @@ impl<R: Reader> Decoder<R> {
         let mut out = vec![0; self.header.n_pixels() * self.channels.as_u8() as usize];
         let _ = self.decode_to_buf(&mut out)?;
         Ok(out)
+    }
+    #[inline]
+    pub fn extract_state(self) -> State {
+        self.state
     }
 }

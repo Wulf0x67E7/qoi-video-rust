@@ -14,27 +14,30 @@ use crate::types::{Channels, ColorSpace};
 #[cfg(feature = "std")]
 use crate::utils::GenericWriter;
 use crate::utils::{unlikely, BytesMut, Writer};
+use crate::State;
 
 #[allow(clippy::cast_possible_truncation, unused_assignments, unused_variables)]
-fn encode_impl<W: Writer, const N: usize>(mut buf: W, data: &[u8]) -> Result<usize>
+fn encode_impl<W: Writer, const N: usize>(
+    state: &mut State, mut buf: W, data: &[u8],
+) -> Result<usize>
 where
     Pixel<N>: SupportedChannels,
     [u8; N]: Pod,
 {
     let cap = buf.capacity();
 
-    let mut index = [Pixel::new(); 256];
-    let mut px_prev = Pixel::new().with_a(0xff);
+    let index = &mut state.index;
+    let px_prev = &mut state.px_prev;
     let mut hash_prev = px_prev.hash_index();
     let mut run = 0_u8;
-    let mut px = Pixel::<N>::new().with_a(0xff);
-    let mut index_allowed = false;
+    let mut px = Pixel::<4>::new().with_a(0xff);
+    let index_allowed = &mut state.index_allowed;
 
     let n_pixels = data.len() / N;
 
     for (i, chunk) in data.chunks_exact(N).enumerate() {
         px.read(chunk);
-        if px == px_prev {
+        if px == *px_prev {
             run += 1;
             if run == 62 || unlikely(i == n_pixels - 1) {
                 buf = buf.write_one(QOI_OP_RUN | (run - 1))?;
@@ -45,7 +48,7 @@ where
                 #[cfg(not(feature = "reference"))]
                 {
                     // credits for the original idea: @zakarumych (had to be fixed though)
-                    buf = buf.write_one(if run == 1 && index_allowed {
+                    buf = buf.write_one(if run == 1 && *index_allowed {
                         QOI_OP_INDEX | hash_prev
                     } else {
                         QOI_OP_RUN | (run - 1)
@@ -57,7 +60,7 @@ where
                 }
                 run = 0;
             }
-            index_allowed = true;
+            *index_allowed = true;
             let px_rgba = px.as_rgba(0xff);
             hash_prev = px_rgba.hash_index();
             let index_px = &mut index[hash_prev as usize];
@@ -65,9 +68,9 @@ where
                 buf = buf.write_one(QOI_OP_INDEX | hash_prev)?;
             } else {
                 *index_px = px_rgba;
-                buf = px.encode_into(px_prev, buf)?;
+                buf = px.encode_into(*px_prev, buf)?;
             }
-            px_prev = px;
+            *px_prev = px;
         }
     }
 
@@ -76,10 +79,12 @@ where
 }
 
 #[inline]
-fn encode_impl_all<W: Writer>(out: W, data: &[u8], channels: Channels) -> Result<usize> {
+fn encode_impl_all<W: Writer>(
+    state: &mut State, out: W, data: &[u8], channels: Channels,
+) -> Result<usize> {
     match channels {
-        Channels::Rgb => encode_impl::<_, 3>(out, data),
-        Channels::Rgba => encode_impl::<_, 4>(out, data),
+        Channels::Rgb => encode_impl::<_, 3>(state, out, data),
+        Channels::Rgba => encode_impl::<_, 4>(state, out, data),
     }
 }
 
@@ -117,6 +122,7 @@ pub fn encode_to_vec(data: impl AsRef<[u8]>, width: u32, height: u32) -> Result<
 pub struct Encoder<'a> {
     data: &'a [u8],
     header: Header,
+    state: State,
 }
 
 impl<'a> Encoder<'a> {
@@ -125,8 +131,14 @@ impl<'a> Encoder<'a> {
     /// The number of channels will be inferred automatically (the valid values
     /// are 3 or 4). The color space will be set to sRGB by default.
     #[inline]
-    #[allow(clippy::cast_possible_truncation)]
     pub fn new(data: &'a (impl AsRef<[u8]> + ?Sized), width: u32, height: u32) -> Result<Self> {
+        Self::new_with(State::default(), data, width, height)
+    }
+    #[inline]
+    #[allow(clippy::cast_possible_truncation)]
+    pub fn new_with(
+        state: State, data: &'a (impl AsRef<[u8]> + ?Sized), width: u32, height: u32,
+    ) -> Result<Self> {
         let data = data.as_ref();
         let mut header =
             Header::try_new(width, height, Channels::default(), ColorSpace::default())?;
@@ -136,7 +148,7 @@ impl<'a> Encoder<'a> {
             return Err(Error::InvalidImageLength { size, width, height });
         }
         header.channels = Channels::try_from(n_channels.min(0xff) as u8)?;
-        Ok(Self { data, header })
+        Ok(Self { data, header, state })
     }
 
     /// Returns a new encoder with modified color space.
@@ -173,7 +185,7 @@ impl<'a> Encoder<'a> {
     ///
     /// The minimum size of the buffer can be found via [`Encoder::required_buf_len`].
     #[inline]
-    pub fn encode_to_buf(&self, mut buf: impl AsMut<[u8]>) -> Result<usize> {
+    pub fn encode_to_buf(&mut self, mut buf: impl AsMut<[u8]>) -> Result<usize> {
         let buf = buf.as_mut();
         let size_required = self.required_buf_len();
         if unlikely(buf.len() < size_required) {
@@ -181,14 +193,15 @@ impl<'a> Encoder<'a> {
         }
         let (head, tail) = buf.split_at_mut(QOI_HEADER_SIZE); // can't panic
         head.copy_from_slice(&self.header.encode());
-        let n_written = encode_impl_all(BytesMut::new(tail), self.data, self.header.channels)?;
+        let n_written =
+            encode_impl_all(&mut self.state, BytesMut::new(tail), self.data, self.header.channels)?;
         Ok(QOI_HEADER_SIZE + n_written)
     }
 
     /// Encodes the image into a newly allocated vector of bytes and returns it.
     #[cfg(any(feature = "alloc", feature = "std"))]
     #[inline]
-    pub fn encode_to_vec(&self) -> Result<Vec<u8>> {
+    pub fn encode_to_vec(&mut self) -> Result<Vec<u8>> {
         let mut out = vec![0_u8; self.required_buf_len()];
         let size = self.encode_to_buf(&mut out)?;
         out.truncate(size);
@@ -201,10 +214,19 @@ impl<'a> Encoder<'a> {
     /// it would more effficient to use a specialized method instead: [`Encoder::encode_to_buf`].
     #[cfg(feature = "std")]
     #[inline]
-    pub fn encode_to_stream<W: Write>(&self, writer: &mut W) -> Result<usize> {
+    pub fn encode_to_stream<W: Write>(&mut self, writer: &mut W) -> Result<usize> {
         writer.write_all(&self.header.encode())?;
-        let n_written =
-            encode_impl_all(GenericWriter::new(writer), self.data, self.header.channels)?;
+        let n_written = encode_impl_all(
+            &mut self.state,
+            GenericWriter::new(writer),
+            self.data,
+            self.header.channels,
+        )?;
         Ok(n_written + QOI_HEADER_SIZE)
+    }
+
+    #[inline]
+    pub fn into_state(self) -> State {
+        self.state
     }
 }

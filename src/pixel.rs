@@ -14,15 +14,17 @@ impl<const N: usize> Pixel<N> {
     }
 
     #[inline]
+    pub fn read_exact(&mut self, s: &[u8]) {
+        assert_eq!(N, s.len(), "Provided slice is the wrong len.");
+        self.read(s);
+    }
+
+    #[inline]
     pub fn read(&mut self, s: &[u8]) {
-        if s.len() == N {
-            let mut i = 0;
-            while i < N {
-                self.0[i] = s[i];
-                i += 1;
-            }
-        } else {
-            unreachable!();
+        let mut i = 0;
+        while i < N.min(s.len()) {
+            self.0[i] = s[i];
+            i += 1;
         }
     }
 
@@ -170,10 +172,10 @@ impl<const N: usize> Pixel<N> {
     }
 }
 
-impl<const N: usize> From<Pixel<N>> for [u8; N] {
+impl<const N: usize, const NN: usize> From<Pixel<N>> for [u8; NN] {
     #[inline(always)]
     fn from(px: Pixel<N>) -> Self {
-        px.0
+        px.0[..NN].try_into().unwrap()
     }
 }
 
