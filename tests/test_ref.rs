@@ -104,8 +104,8 @@ fn test_reference_images() -> Result<()> {
                 compare_slices(&png_name, "encoding", &encoded, &expected)?;
             }
         }
-        let (_header1, decoded1) = decode_to_vec(&encoded)?;
-        let (_header2, decoded2) = decode_to_vec(&expected)?;
+        let (_header1, decoded1) = decode_to_vec::<false>(&encoded)?;
+        let (_header2, decoded2) = decode_to_vec::<false>(&expected)?;
         compare_slices(&png_name, "decoding [1]", &decoded1, &img.data)?;
         compare_slices(&png_name, "decoding [2]", &decoded2, &img.data)?;
     }

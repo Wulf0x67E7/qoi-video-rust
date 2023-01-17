@@ -143,7 +143,7 @@ impl Codec for CodecQoiRust {
     }
 
     fn decode(data: &[u8], _img: &Image) -> Result<Vec<u8>> {
-        Ok(qoi::decode_to_vec(data)?.1)
+        Ok(qoi::decode_to_vec::<false>(data)?.1)
     }
 }
 

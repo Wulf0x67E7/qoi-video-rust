@@ -24,7 +24,7 @@ const QOI_OP_LUMA_END: u8 = QOI_OP_LUMA | 0x3f;
 
 #[inline]
 fn decode_impl_slice<const N: usize, const RGBA: bool>(
-    state: &mut State, data: &[u8], out: &mut [u8],
+    state: &mut State, mut data: &[u8], out: &mut [u8],
 ) -> Result<usize>
 where
     Pixel<N>: SupportedChannels,
@@ -32,7 +32,6 @@ where
 {
     let mut pixels = cast_slice_mut::<_, [u8; N]>(out);
     let data_len = data.len();
-    let mut data = data;
 
     let index = &mut state.index;
     let mut px = Pixel::<4>::new().with_a(0xff);
@@ -73,22 +72,14 @@ where
             }
             _ => {
                 cold();
-                if unlikely(data.len() < QOI_PADDING_SIZE) {
-                    return Err(Error::UnexpectedBufferEnd);
-                }
+                return Err(Error::UnexpectedBufferEnd);
             }
         }
         index[px.hash_index() as usize] = px;
         *px_out = px.into();
     }
 
-    if unlikely(data.len() < QOI_PADDING_SIZE) {
-        return Err(Error::UnexpectedBufferEnd);
-    } else if unlikely(data[..QOI_PADDING_SIZE] != QOI_PADDING) {
-        return Err(Error::InvalidPadding);
-    }
-
-    Ok(data_len.saturating_sub(data.len()).saturating_sub(QOI_PADDING_SIZE))
+    Ok(data_len.saturating_sub(data.len()))
 }
 
 #[inline]
@@ -112,9 +103,11 @@ fn decode_impl_slice_all(
 /// Note: the resulting number of channels will match the header. In order to change
 /// the number of channels, use [`Decoder::with_channels`].
 #[inline]
-pub fn decode_to_buf(buf: impl AsMut<[u8]>, data: impl AsRef<[u8]>) -> Result<Header> {
+pub fn decode_to_buf<const DATA_ONLY: bool>(
+    buf: impl AsMut<[u8]>, data: impl AsRef<[u8]>,
+) -> Result<Header> {
     let mut decoder = Decoder::new(&data)?;
-    decoder.decode_to_buf(buf)?;
+    decoder.decode_to_buf::<DATA_ONLY>(buf)?;
     Ok(*decoder.header())
 }
 
@@ -124,9 +117,9 @@ pub fn decode_to_buf(buf: impl AsMut<[u8]>, data: impl AsRef<[u8]>) -> Result<He
 /// the number of channels, use [`Decoder::with_channels`].
 #[cfg(any(feature = "std", feature = "alloc"))]
 #[inline]
-pub fn decode_to_vec(data: impl AsRef<[u8]>) -> Result<(Header, Vec<u8>)> {
+pub fn decode_to_vec<const DATA_ONLY: bool>(data: impl AsRef<[u8]>) -> Result<(Header, Vec<u8>)> {
     let mut decoder = Decoder::new(&data)?;
-    let out = decoder.decode_to_vec()?;
+    let out = decoder.decode_to_vec::<DATA_ONLY>()?;
     Ok((*decoder.header(), out))
 }
 
@@ -190,19 +183,13 @@ where
             }
             _ => {
                 cold();
+                return Err(Error::UnexpectedBufferEnd);
             }
         }
 
         index[px.hash_index() as usize] = px;
         *px_out = px.into();
     }
-
-    let mut p = [0_u8; QOI_PADDING_SIZE];
-    data.read_exact(&mut p)?;
-    if unlikely(p != QOI_PADDING) {
-        return Err(Error::InvalidPadding);
-    }
-
     Ok(())
 }
 
@@ -226,7 +213,7 @@ fn decode_impl_stream_all<R: Read>(
 #[doc(hidden)]
 pub trait Reader: Sized {
     fn decode_header(&mut self) -> Result<Header>;
-    fn decode_image(
+    fn decode_image<const DATA_ONLY: bool>(
         &mut self, state: &mut State, out: &mut [u8], channels: u8, src_channels: u8,
     ) -> Result<()>;
 }
@@ -254,12 +241,18 @@ impl<'a> Reader for Bytes<'a> {
     }
 
     #[inline]
-    fn decode_image(
+    fn decode_image<const DATA_ONLY: bool>(
         &mut self, state: &mut State, out: &mut [u8], channels: u8, src_channels: u8,
     ) -> Result<()> {
         let n_read = decode_impl_slice_all(state, self.0, out, channels, src_channels)?;
         self.0 = &self.0[n_read..];
-        Ok(())
+        if !DATA_ONLY && unlikely(self.0.len() < QOI_PADDING_SIZE) {
+            Err(Error::UnexpectedBufferEnd)
+        } else if !DATA_ONLY && unlikely(self.0[..QOI_PADDING_SIZE] != QOI_PADDING) {
+            Err(Error::InvalidPadding)
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -273,10 +266,19 @@ impl<R: Read> Reader for R {
     }
 
     #[inline]
-    fn decode_image(
+    fn decode_image<const DATA_ONLY: bool>(
         &mut self, state: &mut State, out: &mut [u8], channels: u8, src_channels: u8,
     ) -> Result<()> {
-        decode_impl_stream_all(state, self, out, channels, src_channels)
+        decode_impl_stream_all(state, self, out, channels, src_channels)?;
+        if !DATA_ONLY && {
+            let mut p = [0; QOI_PADDING_SIZE];
+            self.read_exact(&mut p)?;
+            p != QOI_PADDING
+        } {
+            Err(Error::InvalidPadding)
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -389,13 +391,15 @@ impl<R: Reader> Decoder<R> {
     ///
     /// The minimum size of the buffer can be found via [`Decoder::required_buf_len`].
     #[inline]
-    pub fn decode_to_buf(&mut self, mut buf: impl AsMut<[u8]>) -> Result<usize> {
+    pub fn decode_to_buf<const DATA_ONLY: bool>(
+        &mut self, mut buf: impl AsMut<[u8]>,
+    ) -> Result<usize> {
         let buf = buf.as_mut();
         let size = self.required_buf_len();
         if unlikely(buf.len() < size) {
             return Err(Error::OutputBufferTooSmall { size: buf.len(), required: size });
         }
-        self.reader.decode_image(
+        self.reader.decode_image::<DATA_ONLY>(
             &mut self.state,
             buf,
             self.channels.as_u8(),
@@ -407,9 +411,9 @@ impl<R: Reader> Decoder<R> {
     /// Decodes the image into a newly allocated vector of bytes and returns it.
     #[cfg(any(feature = "std", feature = "alloc"))]
     #[inline]
-    pub fn decode_to_vec(&mut self) -> Result<Vec<u8>> {
+    pub fn decode_to_vec<const DATA_ONLY: bool>(&mut self) -> Result<Vec<u8>> {
         let mut out = vec![0; self.header.n_pixels() * self.channels.as_u8() as usize];
-        let _ = self.decode_to_buf(&mut out)?;
+        let _ = self.decode_to_buf::<DATA_ONLY>(&mut out)?;
         Ok(out)
     }
     #[inline]
