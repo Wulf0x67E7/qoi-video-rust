@@ -35,14 +35,14 @@ where
     let mut data = data;
 
     let index = &mut state.index;
-    let px = &mut state.px_prev;
+    let mut px = Pixel::<4>::new().with_a(0xff);
 
     while let [px_out, ptail @ ..] = pixels {
         pixels = ptail;
         match data {
             [b1 @ QOI_OP_INDEX..=QOI_OP_INDEX_END, dtail @ ..] => {
-                *px = index[*b1 as usize];
-                *px_out = (*px).into();
+                px = index[*b1 as usize];
+                *px_out = px.into();
                 data = dtail;
                 continue;
             }
@@ -55,10 +55,10 @@ where
                 data = dtail;
             }
             [b1 @ QOI_OP_RUN..=QOI_OP_RUN_END, dtail @ ..] => {
-                *px_out = (*px).into();
+                *px_out = px.into();
                 let run = ((b1 & 0x3f) as usize).min(pixels.len());
                 let (phead, ptail) = pixels.split_at_mut(run); // can't panic
-                phead.fill((*px).into());
+                phead.fill(px.into());
                 pixels = ptail;
                 data = dtail;
                 continue;
@@ -78,8 +78,8 @@ where
                 }
             }
         }
-        index[px.hash_index() as usize] = *px;
-        *px_out = (*px).into();
+        index[px.hash_index() as usize] = px;
+        *px_out = px.into();
     }
 
     if unlikely(data.len() < QOI_PADDING_SIZE) {
@@ -148,7 +148,7 @@ where
     let mut pixels = cast_slice_mut::<_, [u8; N]>(out);
 
     let index = &mut state.index;
-    let px = &mut state.px_prev;
+    let mut px = Pixel::<4>::new().with_a(0xff);
 
     while let [px_out, ptail @ ..] = pixels {
         pixels = ptail;
@@ -157,8 +157,8 @@ where
         let [b1] = p;
         match b1 {
             QOI_OP_INDEX..=QOI_OP_INDEX_END => {
-                *px = index[b1 as usize];
-                *px_out = (*px).into();
+                px = index[b1 as usize];
+                *px_out = px.into();
                 continue;
             }
             QOI_OP_RGB => {
@@ -172,10 +172,10 @@ where
                 px.update_rgba(p[0], p[1], p[2], p[3]);
             }
             QOI_OP_RUN..=QOI_OP_RUN_END => {
-                *px_out = (*px).into();
+                *px_out = px.into();
                 let run = ((b1 & 0x3f) as usize).min(pixels.len());
                 let (phead, ptail) = pixels.split_at_mut(run); // can't panic
-                phead.fill((*px).into());
+                phead.fill(px.into());
                 pixels = ptail;
                 continue;
             }
@@ -193,8 +193,8 @@ where
             }
         }
 
-        index[px.hash_index() as usize] = *px;
-        *px_out = (*px).into();
+        index[px.hash_index() as usize] = px;
+        *px_out = px.into();
     }
 
     let mut p = [0_u8; QOI_PADDING_SIZE];

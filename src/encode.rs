@@ -27,7 +27,7 @@ where
     let cap = buf.capacity();
 
     let index = &mut state.index;
-    let px_prev = &mut state.px_prev;
+    let mut px_prev = Pixel::<4>::new().with_a(0xff);
     let mut hash_prev = px_prev.hash_index();
     let mut run = 0_u8;
     let mut px = Pixel::<4>::new().with_a(0xff);
@@ -37,7 +37,7 @@ where
 
     for (i, chunk) in data.chunks_exact(N).enumerate() {
         px.read(chunk);
-        if px == *px_prev {
+        if px == px_prev {
             run += 1;
             if run == 62 || unlikely(i == n_pixels - 1) {
                 buf = buf.write_one(QOI_OP_RUN | (run - 1))?;
@@ -68,9 +68,9 @@ where
                 buf = buf.write_one(QOI_OP_INDEX | hash_prev)?;
             } else {
                 *index_px = px_rgba;
-                buf = px.encode_into(*px_prev, buf)?;
+                buf = px.encode_into(px_prev, buf)?;
             }
-            *px_prev = px;
+            px_prev = px;
         }
     }
 
