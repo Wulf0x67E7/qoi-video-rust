@@ -299,11 +299,12 @@ impl<'a> Decoder<Bytes<'a>> {
     /// stream, use [`Decoder::from_stream`] instead.
     /// #[inline]
     pub fn new(data: &'a (impl AsRef<[u8]> + ?Sized)) -> Result<Self> {
-        Self::new_with(State::default(), data)
+        let mut reader = Bytes::new(data.as_ref());
+        Ok(Self::new_with(reader.decode_header()?, State::default(), reader))
     }
     #[inline]
-    pub fn new_with(state: State, data: &'a (impl AsRef<[u8]> + ?Sized)) -> Result<Self> {
-        Self::new_impl(state, Bytes::new(data.as_ref()))
+    pub fn new_with(header: Header, state: State, reader: Bytes<'a>) -> Self {
+        Self::new_impl(header, state, reader)
     }
 
     /// Returns the undecoded tail of the input slice of bytes.
@@ -326,8 +327,8 @@ impl<R: Read> Decoder<R> {
         Self::from_stream_with(State::default(), reader)
     }
     #[inline]
-    pub fn from_stream_with(state: State, reader: R) -> Result<Self> {
-        Self::new_impl(state, reader)
+    pub fn from_stream_with(state: State, mut reader: R) -> Result<Self> {
+        Ok(Self::new_impl(reader.decode_header()?, state, reader))
     }
 
     /// Returns an immutable reference to the underlying reader.
@@ -346,9 +347,8 @@ impl<R: Read> Decoder<R> {
 
 impl<R: Reader> Decoder<R> {
     #[inline]
-    fn new_impl(state: State, mut reader: R) -> Result<Self> {
-        let header = reader.decode_header()?;
-        Ok(Self { reader, header, channels: header.channels, state })
+    fn new_impl(header: Header, state: State, reader: R) -> Self {
+        Self { reader, header, channels: header.channels, state }
     }
 
     /// Returns a new decoder with modified number of channels.
