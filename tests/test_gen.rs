@@ -286,7 +286,7 @@ fn test_generated() {
         let gen = ImageGen::new_random(&mut rng);
         let img = gen.generate(&mut rng, channels, min_len);
 
-        let encode = |data: &[u8], size| encode_to_vec(data, size, 1);
+        let encode = |data: &[u8], size| encode_to_vec::<false>(data, size, 1);
         let decode = |data: &[u8]| decode_to_vec(data).map(|r| r.1);
         let encode_c = |data: &[u8], size| qoi_encode(data, size, 1, channels as _);
         let decode_c = |data: &[u8]| qoi_decode(data, channels as _).map(|r| r.1);

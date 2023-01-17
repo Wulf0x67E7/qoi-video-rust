@@ -114,7 +114,7 @@ impl Header {
     ///
     /// Can be used to pre-allocate the buffer to encode the image into.
     #[inline]
-    pub fn encode_max_len(&self) -> usize {
-        encode_max_len(self.width, self.height, self.channels)
+    pub fn encode_max_len<const DATA_ONLY: bool>(&self) -> usize {
+        encode_max_len::<DATA_ONLY>(self.width, self.height, self.channels)
     }
 }

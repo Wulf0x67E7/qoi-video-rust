@@ -31,7 +31,7 @@ where
     let mut hash_prev = px_prev.hash_index();
     let mut run = 0_u8;
     let mut px = Pixel::<4>::new().with_a(0xff);
-    let index_allowed = &mut state.index_allowed;
+    let mut index_allowed = false;
 
     let n_pixels = data.len() / N;
 
@@ -48,7 +48,7 @@ where
                 #[cfg(not(feature = "reference"))]
                 {
                     // credits for the original idea: @zakarumych (had to be fixed though)
-                    buf = buf.write_one(if run == 1 && *index_allowed {
+                    buf = buf.write_one(if run == 1 && index_allowed {
                         QOI_OP_INDEX | hash_prev
                     } else {
                         QOI_OP_RUN | (run - 1)
@@ -60,7 +60,7 @@ where
                 }
                 run = 0;
             }
-            *index_allowed = true;
+            index_allowed = true;
             let px_rgba = px.as_rgba(0xff);
             hash_prev = px_rgba.hash_index();
             let index_px = &mut index[hash_prev as usize];
@@ -73,8 +73,6 @@ where
             px_prev = px;
         }
     }
-
-    buf = buf.write_many(&QOI_PADDING)?;
     Ok(cap.saturating_sub(buf.capacity()))
 }
 
@@ -92,30 +90,32 @@ fn encode_impl_all<W: Writer>(
 ///
 /// Can be used to pre-allocate the buffer to encode the image into.
 #[inline]
-pub fn encode_max_len(width: u32, height: u32, channels: impl Into<u8>) -> usize {
+pub fn encode_max_len<const DATA_ONLY: bool>(
+    width: u32, height: u32, channels: impl Into<u8>,
+) -> usize {
     let (width, height) = (width as usize, height as usize);
     let n_pixels = width.saturating_mul(height);
-    QOI_HEADER_SIZE
-        + n_pixels.saturating_mul(channels.into() as usize)
-        + n_pixels
-        + QOI_PADDING_SIZE
+    n_pixels.saturating_mul(channels.into() as usize + 1)
+        + if DATA_ONLY { 0 } else { QOI_HEADER_SIZE + QOI_PADDING_SIZE }
 }
 
 /// Encode the image into a pre-allocated buffer.
 ///
 /// Returns the total number of bytes written.
 #[inline]
-pub fn encode_to_buf(
+pub fn encode_to_buf<const DATA_ONLY: bool>(
     buf: impl AsMut<[u8]>, data: impl AsRef<[u8]>, width: u32, height: u32,
 ) -> Result<usize> {
-    Encoder::new(&data, width, height)?.encode_to_buf(buf)
+    Encoder::new(&data, width, height)?.encode_to_buf::<DATA_ONLY>(buf)
 }
 
 /// Encode the image into a newly allocated vector.
 #[cfg(any(feature = "alloc", feature = "std"))]
 #[inline]
-pub fn encode_to_vec(data: impl AsRef<[u8]>, width: u32, height: u32) -> Result<Vec<u8>> {
-    Encoder::new(&data, width, height)?.encode_to_vec()
+pub fn encode_to_vec<const DATA_ONLY: bool>(
+    data: impl AsRef<[u8]>, width: u32, height: u32,
+) -> Result<Vec<u8>> {
+    Encoder::new(&data, width, height)?.encode_to_vec::<DATA_ONLY>()
 }
 
 /// Encode QOI images into buffers or into streams.
@@ -177,33 +177,46 @@ impl<'a> Encoder<'a> {
     ///
     /// Can be used to pre-allocate the buffer to encode the image into.
     #[inline]
-    pub fn required_buf_len(&self) -> usize {
-        self.header.encode_max_len()
+    pub fn required_buf_len<const DATA_ONLY: bool>(&self) -> usize {
+        self.header.encode_max_len::<DATA_ONLY>()
     }
 
     /// Encodes the image to a pre-allocated buffer and returns the number of bytes written.
     ///
     /// The minimum size of the buffer can be found via [`Encoder::required_buf_len`].
     #[inline]
-    pub fn encode_to_buf(&mut self, mut buf: impl AsMut<[u8]>) -> Result<usize> {
+    pub fn encode_to_buf<const DATA_ONLY: bool>(
+        &mut self, mut buf: impl AsMut<[u8]>,
+    ) -> Result<usize> {
         let buf = buf.as_mut();
-        let size_required = self.required_buf_len();
+        let size_required = self.required_buf_len::<DATA_ONLY>();
         if unlikely(buf.len() < size_required) {
             return Err(Error::OutputBufferTooSmall { size: buf.len(), required: size_required });
         }
-        let (head, tail) = buf.split_at_mut(QOI_HEADER_SIZE); // can't panic
-        head.copy_from_slice(&self.header.encode());
-        let n_written =
-            encode_impl_all(&mut self.state, BytesMut::new(tail), self.data, self.header.channels)?;
-        Ok(QOI_HEADER_SIZE + n_written)
+        let mut n_written = 0;
+        if !DATA_ONLY {
+            buf[..QOI_HEADER_SIZE].copy_from_slice(&self.header.encode());
+            n_written += QOI_HEADER_SIZE;
+        }
+        n_written += encode_impl_all(
+            &mut self.state,
+            BytesMut::new(&mut buf[n_written..]),
+            self.data,
+            self.header.channels,
+        )?;
+        if !DATA_ONLY {
+            buf[n_written..n_written + QOI_PADDING_SIZE].copy_from_slice(&QOI_PADDING);
+            n_written += QOI_PADDING_SIZE;
+        }
+        Ok(n_written)
     }
 
     /// Encodes the image into a newly allocated vector of bytes and returns it.
     #[cfg(any(feature = "alloc", feature = "std"))]
     #[inline]
-    pub fn encode_to_vec(&mut self) -> Result<Vec<u8>> {
-        let mut out = vec![0_u8; self.required_buf_len()];
-        let size = self.encode_to_buf(&mut out)?;
+    pub fn encode_to_vec<const DATA_ONLY: bool>(&mut self) -> Result<Vec<u8>> {
+        let mut out = vec![0_u8; self.required_buf_len::<DATA_ONLY>()];
+        let size = self.encode_to_buf::<DATA_ONLY>(&mut out)?;
         out.truncate(size);
         Ok(out)
     }
@@ -214,15 +227,25 @@ impl<'a> Encoder<'a> {
     /// it would more effficient to use a specialized method instead: [`Encoder::encode_to_buf`].
     #[cfg(feature = "std")]
     #[inline]
-    pub fn encode_to_stream<W: Write>(&mut self, writer: &mut W) -> Result<usize> {
-        writer.write_all(&self.header.encode())?;
-        let n_written = encode_impl_all(
+    pub fn encode_to_stream<W: Write, const DATA_ONLY: bool>(
+        &mut self, mut writer: W,
+    ) -> Result<usize> {
+        let mut n_written = 0;
+        if !DATA_ONLY {
+            writer.write_all(&self.header.encode())?;
+            n_written += QOI_HEADER_SIZE;
+        }
+        n_written += encode_impl_all(
             &mut self.state,
-            GenericWriter::new(writer),
+            GenericWriter::new(&mut writer),
             self.data,
             self.header.channels,
         )?;
-        Ok(n_written + QOI_HEADER_SIZE)
+        if !DATA_ONLY {
+            writer.write_all(&QOI_PADDING)?;
+            n_written += QOI_PADDING_SIZE;
+        }
+        Ok(n_written)
     }
 
     #[inline]

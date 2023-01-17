@@ -19,7 +19,7 @@ where
     let pixels = pixels.as_ref();
     let expected = expected.as_ref();
     let pixels_raw = cast_slice::<_, u8>(pixels);
-    let encoded = encode_to_vec(pixels_raw, pixels.len() as _, 1).unwrap();
+    let encoded = encode_to_vec::<false>(pixels_raw, pixels.len() as _, 1).unwrap();
     let decoded = decode_to_vec(&encoded).unwrap().1;
     assert_eq!(pixels_raw, decoded.as_slice(), "roundtrip failed (encoded={:?}))", encoded);
     assert!(encoded.len() >= expected.len() + QOI_HEADER_SIZE + QOI_PADDING_SIZE);

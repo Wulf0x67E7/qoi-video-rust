@@ -96,7 +96,7 @@ fn test_reference_images() -> Result<()> {
         let png_name = png_path.file_name().unwrap_or_default().to_string_lossy();
         let img = Image::from_png(png_path)?;
         println!("{} {} {} {}", png_name, img.width, img.height, img.channels);
-        let encoded = encode_to_vec(&img.data, img.width, img.height)?;
+        let encoded = encode_to_vec::<false>(&img.data, img.width, img.height)?;
         let expected = fs::read(qoi_path)?;
         assert_eq!(encoded.len(), expected.len()); // this should match regardless
         cfg_if! {
