@@ -76,7 +76,7 @@ where
                 match b2 {
                     _ if b2 & QOI_OP_LONG_INDEX == QOI_OP_LONG_INDEX => {
                         let hash_index =
-                            (((b1 & 0x3f) as u16) << 4) | (((b2 & QOI_OP_LONG_RUN) as u16) >> 4);
+                            ((b1 & 0x3f) as u16) | ((b2 & QOI_OP_LONG_RUN) as u16) << 2;
                         px = *state.index_l2(hash_index);
                         *px_out = px.into();
                         // Move chosen l2 into l1 and evicted l1 into l2
@@ -222,7 +222,7 @@ where
                 match b2 {
                     _ if b2 & QOI_OP_LONG_INDEX == QOI_OP_LONG_INDEX => {
                         let hash_index =
-                            (((b1 & 0x3f) as u16) << 4) | (((b2 & QOI_OP_LONG_RUN) as u16) >> 4);
+                            ((b1 & 0x3f) as u16) | ((b2 & QOI_OP_LONG_RUN) as u16) << 2;
                         px = *state.index_l2(hash_index);
                         *px_out = px.into();
                         // Move chosen l2 into l1 and evicted l1 into l2

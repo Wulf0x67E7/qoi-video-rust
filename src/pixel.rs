@@ -1,6 +1,4 @@
 use crate::consts::{QOI_OP_DIFF, QOI_OP_LUMA, QOI_OP_RGB, QOI_OP_RGBA};
-use crate::error::Result;
-use crate::utils::Writer;
 use bytemuck::{cast, Pod};
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -142,7 +140,7 @@ impl<const N: usize> Pixel<N> {
     }
 
     #[inline]
-    pub fn encode_into<W: Writer>(&self, px_prev: Self, buf: W) -> Result<W> {
+    pub fn encode(&self, px_prev: Self) -> (usize, [u8; 5]) {
         if N == 3 || self.a_or(0) == px_prev.a_or(0) {
             let vg = self.g().wrapping_sub(px_prev.g());
             let vg_32 = vg.wrapping_add(32);
@@ -154,20 +152,20 @@ impl<const N: usize> Pixel<N> {
                 let (vr_2, vg_2, vb_2) =
                     (vr.wrapping_add(2), vg.wrapping_add(2), vb.wrapping_add(2));
                 if vr_2 | vg_2 | vb_2 | 3 == 3 {
-                    buf.write_one(QOI_OP_DIFF | vr_2 << 4 | vg_2 << 2 | vb_2)
+                    (1, [QOI_OP_DIFF | vr_2 << 4 | vg_2 << 2 | vb_2, 0, 0, 0, 0])
                 } else {
                     let (vg_r_8, vg_b_8) = (vg_r.wrapping_add(7), vg_b.wrapping_add(7));
                     if vg_r_8 < 0xf && vg_b_8 < 0xf {
-                        buf.write_many(&[QOI_OP_LUMA | vg_32, vg_r_8 << 4 | vg_b_8])
+                        (2, [QOI_OP_LUMA | vg_32, vg_r_8 << 4 | vg_b_8, 0, 0, 0])
                     } else {
-                        buf.write_many(&[QOI_OP_RGB, self.r(), self.g(), self.b()])
+                        (4, [QOI_OP_RGB, self.r(), self.g(), self.b(), 0])
                     }
                 }
             } else {
-                buf.write_many(&[QOI_OP_RGB, self.r(), self.g(), self.b()])
+                (4, [QOI_OP_RGB, self.r(), self.g(), self.b(), 0])
             }
         } else {
-            buf.write_many(&[QOI_OP_RGBA, self.r(), self.g(), self.b(), self.a_or(0xff)])
+            (5, [QOI_OP_RGBA, self.r(), self.g(), self.b(), self.a_or(0xff)])
         }
     }
 }

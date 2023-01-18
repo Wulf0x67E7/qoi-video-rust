@@ -1,14 +1,15 @@
 #[cfg(any(feature = "std", feature = "alloc"))]
 use alloc::{vec, vec::Vec};
 use core::convert::TryFrom;
+use core::mem::replace;
 #[cfg(feature = "std")]
 use std::io::Write;
 
 use bytemuck::Pod;
 
 use crate::consts::{
-    QOI_HEADER_SIZE, QOI_OP_INDEX, QOI_OP_LONG_RUN, QOI_OP_LUMA, QOI_OP_PREV, QOI_OP_RUN,
-    QOI_PADDING, QOI_PADDING_SIZE,
+    QOI_HEADER_SIZE, QOI_OP_INDEX, QOI_OP_LONG_INDEX, QOI_OP_LONG_RUN, QOI_OP_LUMA, QOI_OP_PREV,
+    QOI_OP_RUN, QOI_PADDING, QOI_PADDING_SIZE,
 };
 use crate::error::{Error, Result};
 use crate::header::Header;
@@ -30,10 +31,8 @@ where
     let cap = buf.capacity();
 
     let mut px_prev = Pixel::<4>::new().with_a(0xff);
-    let mut hash_prev = px_prev.hash_index();
     let mut run = 0_u16;
-    let mut px = Pixel::<4>::new().with_a(0xff);
-    let mut index_allowed = false;
+    let mut px = px_prev;
 
     let n_pixels = data.len() / N;
 
@@ -73,15 +72,26 @@ where
                 }
                 run = 0;
             }
-            index_allowed = true;
             let px_rgba = px.as_rgba(0xff);
-            hash_prev = px_rgba.hash_index();
-            let index_px = state.index_l1(hash_prev);
+            let px_hash = px_rgba.hash_index();
+            let index_px = state.index_l1(px_hash);
             if *index_px == px_rgba {
-                buf = buf.write_one(QOI_OP_INDEX | (hash_prev as u8 & 0x3f))?;
+                buf = buf.write_one(QOI_OP_INDEX | (px_hash as u8 & 0x3f))?;
             } else {
-                *index_px = px_rgba;
-                buf = px.encode_into(px_prev, buf)?;
+                let old_px_l1 = replace(index_px, px_rgba);
+                let (mut len, mut encoded) = px.encode(px_prev);
+                if len <= 2 && *state.index_l2(px_hash) == px_rgba {
+                    len = 2;
+                    encoded = [
+                        QOI_OP_LUMA | (px_hash & 0x3f) as u8,
+                        (px_hash >> 2) as u8 | QOI_OP_LONG_INDEX,
+                        0,
+                        0,
+                        0,
+                    ];
+                }
+                buf = buf.write_many(&encoded[..len])?;
+                *state.index_l2(old_px_l1.hash_index()) = old_px_l1;
             }
             px_prev = px;
         }
