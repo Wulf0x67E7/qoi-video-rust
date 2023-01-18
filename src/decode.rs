@@ -10,7 +10,7 @@ use bytemuck::{cast_slice_mut, Pod};
 
 use crate::consts::{
     QOI_HEADER_SIZE, QOI_OP_DIFF, QOI_OP_INDEX, QOI_OP_LONG_INDEX, QOI_OP_LONG_RUN, QOI_OP_LUMA,
-    QOI_OP_RGB, QOI_OP_RGBA, QOI_OP_RUN, QOI_PADDING, QOI_PADDING_SIZE,
+    QOI_OP_PREV, QOI_OP_RGB, QOI_OP_RGBA, QOI_OP_RUN, QOI_PADDING, QOI_PADDING_SIZE,
 };
 use crate::error::{Error, Result};
 use crate::header::Header;
@@ -56,10 +56,15 @@ where
             }
             [b1 @ QOI_OP_RUN..=QOI_OP_RUN_END, dtail @ ..] => {
                 *px_out = px.into();
-                let run = ((b1 & 0x3f) as usize).min(pixels.len());
+                let run = ((b1 & 0x3f) as usize + 1).min(pixels.len());
                 let (phead, ptail) = pixels.split_at_mut(run); // can't panic
                 phead.fill(px.into());
                 pixels = ptail;
+                data = dtail;
+                continue;
+            }
+            [QOI_OP_PREV, dtail @ ..] => {
+                *px_out = px.into();
                 data = dtail;
                 continue;
             }
@@ -85,7 +90,7 @@ where
                         *px_out = px.into();
                         let run = (((b1 & 0x3f) as usize)
                             | ((b2 & QOI_OP_LONG_INDEX) as usize) << 6)
-                            .add((1 + QOI_OP_RUN_END - QOI_OP_RUN) as usize)
+                            .add((2 + QOI_OP_RUN_END - QOI_OP_RUN) as usize)
                             .min(pixels.len());
                         let (phead, ptail) = pixels.split_at_mut(run); // can't panic
                         phead.fill(px.into());
@@ -197,10 +202,14 @@ where
             }
             QOI_OP_RUN..=QOI_OP_RUN_END => {
                 *px_out = px.into();
-                let run = ((b1 & 0x3f) as usize).min(pixels.len());
+                let run = ((b1 & 0x3f) as usize + 1).min(pixels.len());
                 let (phead, ptail) = pixels.split_at_mut(run); // can't panic
                 phead.fill(px.into());
                 pixels = ptail;
+                continue;
+            }
+            QOI_OP_PREV => {
+                *px_out = px.into();
                 continue;
             }
             QOI_OP_DIFF..=QOI_OP_DIFF_END => {
@@ -225,7 +234,7 @@ where
                         *px_out = px.into();
                         let run = (((b1 & 0x3f) as usize)
                             | ((b2 & QOI_OP_LONG_INDEX) as usize) << 6)
-                            .add((1 + QOI_OP_RUN_END - QOI_OP_RUN) as usize)
+                            .add((2 + QOI_OP_RUN_END - QOI_OP_RUN) as usize)
                             .min(pixels.len());
                         let (phead, ptail) = pixels.split_at_mut(run); // can't panic
                         phead.fill(px.into());

@@ -1,5 +1,6 @@
 pub const QOI_OP_INDEX: u8 = 0x00; // 00xxxxxx
 pub const QOI_OP_DIFF: u8 = 0x40; // 01xxxxxx
+pub const QOI_OP_PREV: u8 = 0x6a; // 01101010 (OP_DIFF with 0,0,0)
 pub const QOI_OP_LUMA: u8 = 0x80; // 10xxxxxx
 pub const QOI_OP_RUN: u8 = 0xc0; // 11xxxxxx
 pub const QOI_OP_RGB: u8 = 0xfe; // 11111110
