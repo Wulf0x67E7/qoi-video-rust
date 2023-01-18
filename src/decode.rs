@@ -1,5 +1,7 @@
 #[cfg(any(feature = "std", feature = "alloc"))]
 use alloc::{vec, vec::Vec};
+use core::mem::replace;
+use core::ops::Add;
 #[cfg(feature = "std")]
 use std::io::Read;
 
@@ -7,8 +9,8 @@ use std::io::Read;
 use bytemuck::{cast_slice_mut, Pod};
 
 use crate::consts::{
-    QOI_HEADER_SIZE, QOI_OP_DIFF, QOI_OP_INDEX, QOI_OP_LUMA, QOI_OP_RGB, QOI_OP_RGBA, QOI_OP_RUN,
-    QOI_PADDING, QOI_PADDING_SIZE,
+    QOI_HEADER_SIZE, QOI_MASK_LONG_H, QOI_MASK_LONG_L, QOI_OP_DIFF, QOI_OP_INDEX, QOI_OP_LUMA,
+    QOI_OP_RGB, QOI_OP_RGBA, QOI_OP_RUN, QOI_PADDING, QOI_PADDING_SIZE,
 };
 use crate::error::{Error, Result};
 use crate::header::Header;
@@ -23,7 +25,7 @@ const QOI_OP_DIFF_END: u8 = QOI_OP_DIFF | 0x3f;
 const QOI_OP_LUMA_END: u8 = QOI_OP_LUMA | 0x3f;
 
 #[inline]
-fn decode_impl_slice<const N: usize, const RGBA: bool>(
+fn decode_impl_slice<const N: usize>(
     state: &mut State, mut data: &[u8], out: &mut [u8],
 ) -> Result<usize>
 where
@@ -33,14 +35,13 @@ where
     let mut pixels = cast_slice_mut::<_, [u8; N]>(out);
     let data_len = data.len();
 
-    let index = &mut state.index;
     let mut px = Pixel::<4>::new().with_a(0xff);
 
     while let [px_out, ptail @ ..] = pixels {
         pixels = ptail;
         match data {
             [b1 @ QOI_OP_INDEX..=QOI_OP_INDEX_END, dtail @ ..] => {
-                px = index[*b1 as usize];
+                px = *state.index_l1(*b1 as u16);
                 *px_out = px.into();
                 data = dtail;
                 continue;
@@ -49,7 +50,7 @@ where
                 px.update_rgb(*r, *g, *b);
                 data = dtail;
             }
-            [QOI_OP_RGBA, r, g, b, a, dtail @ ..] if RGBA => {
+            [QOI_OP_RGBA, r, g, b, a, dtail @ ..] => {
                 px.update_rgba(*r, *g, *b, *a);
                 data = dtail;
             }
@@ -67,7 +68,34 @@ where
                 data = dtail;
             }
             [b1 @ QOI_OP_LUMA..=QOI_OP_LUMA_END, b2, dtail @ ..] => {
-                px.update_luma(*b1, *b2);
+                match b2 {
+                    _ if b2 & QOI_MASK_LONG_H == QOI_MASK_LONG_H => {
+                        *px_out = px.into();
+                        let run = (((b1 & 0x3f) as usize) << 4 | (b2 & QOI_MASK_LONG_L) as usize)
+                            .add((1 + QOI_OP_RUN_END - QOI_OP_RUN) as usize)
+                            .min(pixels.len());
+                        let (phead, ptail) = pixels.split_at_mut(run); // can't panic
+                        phead.fill(px.into());
+                        pixels = ptail;
+                        data = dtail;
+                        continue;
+                    }
+                    _ if b2 & QOI_MASK_LONG_L == QOI_MASK_LONG_L => {
+                        let hash_index =
+                            (((b1 & 0x3f) as u16) << 4) | (((b2 & QOI_MASK_LONG_H) as u16) >> 4);
+                        px = *state.index_l2(hash_index);
+                        *px_out = px.into();
+                        // Move chosen l2 into l1 and evicted l1 into l2
+                        let old_px_l1 = replace(state.index_l1(hash_index), px);
+                        *state.index_l2(old_px_l1.hash_index()) = old_px_l1;
+                        // cleanup
+                        data = dtail;
+                        continue;
+                    }
+                    _ => {
+                        px.update_luma(*b1, *b2);
+                    }
+                }
                 data = dtail;
             }
             _ => {
@@ -75,7 +103,10 @@ where
                 return Err(Error::UnexpectedBufferEnd);
             }
         }
-        index[px.hash_index() as usize] = px;
+        // Move px into l1 and evicted l1 into l2
+        let old_px_l1 = replace(state.index_l1(px.hash_index()), px);
+        *state.index_l2(old_px_l1.hash_index()) = old_px_l1;
+
         *px_out = px.into();
     }
 
@@ -87,10 +118,10 @@ fn decode_impl_slice_all(
     state: &mut State, data: &[u8], out: &mut [u8], channels: u8, src_channels: u8,
 ) -> Result<usize> {
     match (channels, src_channels) {
-        (3, 3) => decode_impl_slice::<3, false>(state, data, out),
-        (3, 4) => decode_impl_slice::<3, true>(state, data, out),
-        (4, 3) => decode_impl_slice::<4, false>(state, data, out),
-        (4, 4) => decode_impl_slice::<4, true>(state, data, out),
+        (3, 3) => decode_impl_slice::<3>(state, data, out),
+        (3, 4) => decode_impl_slice::<3>(state, data, out),
+        (4, 3) => decode_impl_slice::<4>(state, data, out),
+        (4, 4) => decode_impl_slice::<4>(state, data, out),
         _ => {
             cold();
             Err(Error::InvalidChannels { channels })
@@ -131,7 +162,7 @@ pub fn decode_header(data: impl AsRef<[u8]>) -> Result<Header> {
 
 #[cfg(any(feature = "std"))]
 #[inline]
-fn decode_impl_stream<R: Read, const N: usize, const RGBA: bool>(
+fn decode_impl_stream<R: Read, const N: usize>(
     state: &mut State, data: &mut R, out: &mut [u8],
 ) -> Result<()>
 where
@@ -140,7 +171,6 @@ where
 {
     let mut pixels = cast_slice_mut::<_, [u8; N]>(out);
 
-    let index = &mut state.index;
     let mut px = Pixel::<4>::new().with_a(0xff);
 
     while let [px_out, ptail @ ..] = pixels {
@@ -150,7 +180,7 @@ where
         let [b1] = p;
         match b1 {
             QOI_OP_INDEX..=QOI_OP_INDEX_END => {
-                px = index[b1 as usize];
+                px = *state.index_l1(b1 as u16);
                 *px_out = px.into();
                 continue;
             }
@@ -159,7 +189,7 @@ where
                 data.read_exact(&mut p)?;
                 px.update_rgb(p[0], p[1], p[2]);
             }
-            QOI_OP_RGBA if RGBA => {
+            QOI_OP_RGBA => {
                 let mut p = [0; 4];
                 data.read_exact(&mut p)?;
                 px.update_rgba(p[0], p[1], p[2], p[3]);
@@ -179,15 +209,37 @@ where
                 let mut p = [0];
                 data.read_exact(&mut p)?;
                 let [b2] = p;
-                px.update_luma(b1, b2);
-            }
-            _ => {
-                cold();
-                return Err(Error::UnexpectedBufferEnd);
+                match b2 {
+                    _ if b2 & QOI_MASK_LONG_H == QOI_MASK_LONG_H => {
+                        *px_out = px.into();
+                        let run = (((b1 & 0x3f) as usize) << 4 | (b2 & QOI_MASK_LONG_L) as usize)
+                            .add((1 + QOI_OP_RUN_END - QOI_OP_RUN) as usize)
+                            .min(pixels.len());
+                        let (phead, ptail) = pixels.split_at_mut(run); // can't panic
+                        phead.fill(px.into());
+                        pixels = ptail;
+                        continue;
+                    }
+                    _ if b2 & QOI_MASK_LONG_L == QOI_MASK_LONG_L => {
+                        let hash_index =
+                            (((b1 & 0x3f) as u16) << 4) | (((b2 & QOI_MASK_LONG_H) as u16) >> 4);
+                        px = *state.index_l2(hash_index);
+                        *px_out = px.into();
+                        // Move chosen l2 into l1 and evicted l1 into l2
+                        let old_px_l1 = replace(state.index_l1(hash_index), px);
+                        *state.index_l2(old_px_l1.hash_index()) = old_px_l1;
+                        continue;
+                    }
+                    _ => {
+                        px.update_luma(b1, b2);
+                    }
+                }
             }
         }
+        // Move px into l1 and evicted l1 into l2
+        let old_px_l1 = replace(state.index_l1(px.hash_index()), px);
+        *state.index_l2(old_px_l1.hash_index()) = old_px_l1;
 
-        index[px.hash_index() as usize] = px;
         *px_out = px.into();
     }
     Ok(())
@@ -199,10 +251,10 @@ fn decode_impl_stream_all<R: Read>(
     state: &mut State, data: &mut R, out: &mut [u8], channels: u8, src_channels: u8,
 ) -> Result<()> {
     match (channels, src_channels) {
-        (3, 3) => decode_impl_stream::<_, 3, false>(state, data, out),
-        (3, 4) => decode_impl_stream::<_, 3, true>(state, data, out),
-        (4, 3) => decode_impl_stream::<_, 4, false>(state, data, out),
-        (4, 4) => decode_impl_stream::<_, 4, true>(state, data, out),
+        (3, 3) => decode_impl_stream::<_, 3>(state, data, out),
+        (3, 4) => decode_impl_stream::<_, 3>(state, data, out),
+        (4, 3) => decode_impl_stream::<_, 4>(state, data, out),
+        (4, 4) => decode_impl_stream::<_, 4>(state, data, out),
         _ => {
             cold();
             Err(Error::InvalidChannels { channels })

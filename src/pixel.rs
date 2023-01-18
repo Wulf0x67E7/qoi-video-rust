@@ -64,7 +64,7 @@ impl<const N: usize> Pixel<N> {
     #[inline]
     pub fn update_luma(&mut self, b1: u8, b2: u8) {
         let vg = (b1 & 0x3f).wrapping_sub(32);
-        let vg_8 = vg.wrapping_sub(8);
+        let vg_8 = vg.wrapping_sub(7);
         let vr = vg_8.wrapping_add((b2 >> 4) & 0x0f);
         let vb = vg_8.wrapping_add(b2 & 0x0f);
         self.0[0] = self.0[0].wrapping_add(vr);
@@ -120,7 +120,7 @@ impl<const N: usize> Pixel<N> {
 
     #[inline]
     #[allow(clippy::cast_lossless, clippy::cast_possible_truncation)]
-    pub fn hash_index(self) -> u8
+    pub fn hash_index(self) -> u16
     where
         [u8; N]: Pod,
     {
@@ -131,7 +131,7 @@ impl<const N: usize> Pixel<N> {
             u32::from_ne_bytes([self.0[0], self.0[1], self.0[2], 0xff])
         } as u64;
         let s = ((v & 0xff00_ff00) << 32) | (v & 0x00ff_00ff);
-        s.wrapping_mul(0x0300_0700_0005_000b_u64).to_le().swap_bytes() as u8 & 63
+        s.wrapping_mul(0x0300_0700_0005_000b_u64).to_be() as u16 & 0x03ff
     }
 
     #[inline]
@@ -156,8 +156,8 @@ impl<const N: usize> Pixel<N> {
                 if vr_2 | vg_2 | vb_2 | 3 == 3 {
                     buf.write_one(QOI_OP_DIFF | vr_2 << 4 | vg_2 << 2 | vb_2)
                 } else {
-                    let (vg_r_8, vg_b_8) = (vg_r.wrapping_add(8), vg_b.wrapping_add(8));
-                    if vg_r_8 | vg_b_8 | 15 == 15 {
+                    let (vg_r_8, vg_b_8) = (vg_r.wrapping_add(7), vg_b.wrapping_add(7));
+                    if vg_r_8 < 0xf && vg_b_8 < 0xf {
                         buf.write_many(&[QOI_OP_LUMA | vg_32, vg_r_8 << 4 | vg_b_8])
                     } else {
                         buf.write_many(&[QOI_OP_RGB, self.r(), self.g(), self.b()])

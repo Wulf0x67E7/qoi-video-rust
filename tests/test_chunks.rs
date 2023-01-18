@@ -186,13 +186,13 @@ fn test_encode_diff() {
 fn test_encode_luma() {
     for x in (0..200_u8).step_by(4) {
         let x = [x.wrapping_mul(3), x.wrapping_sub(5), x.wrapping_sub(7)];
-        for dr_g in (0..16).step_by(4) {
+        for dr_g in (0..15).step_by(4) {
             for dg in (0..64).step_by(8) {
-                for db_g in (0..16).step_by(4) {
+                for db_g in (0..15).step_by(4) {
                     if dr_g != 8 || dg != 32 || db_g != 8 {
-                        let r = x[0].wrapping_add(dr_g).wrapping_add(dg).wrapping_sub(40);
+                        let r = x[0].wrapping_add(dr_g).wrapping_add(dg).wrapping_sub(39);
                         let g = x[1].wrapping_add(dg).wrapping_sub(32);
-                        let b = x[2].wrapping_add(db_g).wrapping_add(dg).wrapping_sub(40);
+                        let b = x[2].wrapping_add(db_g).wrapping_add(dg).wrapping_sub(39);
                         let d1 = QOI_OP_LUMA | dg;
                         let d2 = (dr_g << 4) | db_g;
                         test_chunk(

@@ -26,7 +26,6 @@ where
 {
     let cap = buf.capacity();
 
-    let index = &mut state.index;
     let mut px_prev = Pixel::<4>::new().with_a(0xff);
     let mut hash_prev = px_prev.hash_index();
     let mut run = 0_u8;
@@ -49,7 +48,7 @@ where
                 {
                     // credits for the original idea: @zakarumych (had to be fixed though)
                     buf = buf.write_one(if run == 1 && index_allowed {
-                        QOI_OP_INDEX | hash_prev
+                        QOI_OP_INDEX | (hash_prev as u8 & 0x3f)
                     } else {
                         QOI_OP_RUN | (run - 1)
                     })?;
@@ -63,9 +62,9 @@ where
             index_allowed = true;
             let px_rgba = px.as_rgba(0xff);
             hash_prev = px_rgba.hash_index();
-            let index_px = &mut index[hash_prev as usize];
+            let index_px = state.index_l1(hash_prev);
             if *index_px == px_rgba {
-                buf = buf.write_one(QOI_OP_INDEX | hash_prev)?;
+                buf = buf.write_one(QOI_OP_INDEX | (hash_prev as u8 & 0x3f))?;
             } else {
                 *index_px = px_rgba;
                 buf = px.encode_into(px_prev, buf)?;
