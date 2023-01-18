@@ -7,8 +7,8 @@ use std::io::Write;
 use bytemuck::Pod;
 
 use crate::consts::{
-    QOI_HEADER_SIZE, QOI_OP_INDEX, QOI_OP_LONG_INDEX, QOI_OP_LONG_RUN, QOI_OP_LUMA, QOI_OP_RUN,
-    QOI_PADDING, QOI_PADDING_SIZE,
+    QOI_HEADER_SIZE, QOI_OP_INDEX, QOI_OP_LONG_RUN, QOI_OP_LUMA, QOI_OP_RUN, QOI_PADDING,
+    QOI_PADDING_SIZE,
 };
 use crate::error::{Error, Result};
 use crate::header::Header;
@@ -41,11 +41,11 @@ where
         px.read(chunk);
         if px == px_prev {
             run += 1;
-            if run == 1022 + 63 {
+            if run == 959 + 63 {
                 {
                     let run = run - 63;
-                    buf = buf.write_one(QOI_OP_LUMA | (run >> 4) as u8)?;
-                    buf = buf.write_one(QOI_OP_LONG_RUN | run as u8 & 0x3f)?;
+                    buf = buf.write_one(QOI_OP_LUMA | (run & 0x3f) as u8)?;
+                    buf = buf.write_one(QOI_OP_LONG_RUN | (run >> 6) as u8)?;
                 }
                 run = 0;
             } else if unlikely(i == n_pixels - 1) {
@@ -53,8 +53,8 @@ where
                     buf = buf.write_one(QOI_OP_RUN | (run as u8 - 1))?;
                 } else {
                     let run = run - 63;
-                    buf = buf.write_one(QOI_OP_LUMA | (run >> 4) as u8)?;
-                    buf = buf.write_one(QOI_OP_LONG_RUN | run as u8 & QOI_OP_LONG_INDEX)?;
+                    buf = buf.write_one(QOI_OP_LUMA | (run & 0x3f) as u8)?;
+                    buf = buf.write_one(QOI_OP_LONG_RUN | (run >> 6) as u8)?;
                 }
                 run = 0;
             }
@@ -69,8 +69,8 @@ where
                         buf = buf.write_one(QOI_OP_RUN | (run as u8 - 1))?;
                     } else {
                         let run = run - 63;
-                        buf = buf.write_one(QOI_OP_LUMA | (run >> 4) as u8)?;
-                        buf = buf.write_one(QOI_OP_LONG_RUN | run as u8 & QOI_OP_LONG_INDEX)?;
+                        buf = buf.write_one(QOI_OP_LUMA | (run & 0x3f) as u8)?;
+                        buf = buf.write_one(QOI_OP_LONG_RUN | (run >> 6) as u8)?;
                     }
                 }
                 #[cfg(feature = "reference")]
@@ -79,8 +79,8 @@ where
                         buf = buf.write_one(QOI_OP_RUN | (run as u8 - 1))?;
                     } else {
                         let run = run - 63;
-                        buf = buf.write_one(QOI_OP_LUMA | (run >> 4) as u8)?;
-                        buf = buf.write_one(QOI_OP_LONG_RUN | run as u8 & QOI_OP_LONG_INDEX)?;
+                        buf = buf.write_one(QOI_OP_LUMA | (run & 0x3f) as u8)?;
+                        buf = buf.write_one(QOI_OP_LONG_RUN | (run >> 6) as u8)?;
                     }
                 }
                 run = 0;

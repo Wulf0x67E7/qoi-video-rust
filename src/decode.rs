@@ -69,17 +69,6 @@ where
             }
             [b1 @ QOI_OP_LUMA..=QOI_OP_LUMA_END, b2, dtail @ ..] => {
                 match b2 {
-                    _ if b2 & QOI_OP_LONG_RUN == QOI_OP_LONG_RUN => {
-                        *px_out = px.into();
-                        let run = (((b1 & 0x3f) as usize) << 4 | (b2 & QOI_OP_LONG_INDEX) as usize)
-                            .add((1 + QOI_OP_RUN_END - QOI_OP_RUN) as usize)
-                            .min(pixels.len());
-                        let (phead, ptail) = pixels.split_at_mut(run); // can't panic
-                        phead.fill(px.into());
-                        pixels = ptail;
-                        data = dtail;
-                        continue;
-                    }
                     _ if b2 & QOI_OP_LONG_INDEX == QOI_OP_LONG_INDEX => {
                         let hash_index =
                             (((b1 & 0x3f) as u16) << 4) | (((b2 & QOI_OP_LONG_RUN) as u16) >> 4);
@@ -89,6 +78,18 @@ where
                         let old_px_l1 = replace(state.index_l1(hash_index), px);
                         *state.index_l2(old_px_l1.hash_index()) = old_px_l1;
                         // cleanup
+                        data = dtail;
+                        continue;
+                    }
+                    _ if b2 & QOI_OP_LONG_RUN == QOI_OP_LONG_RUN => {
+                        *px_out = px.into();
+                        let run = (((b1 & 0x3f) as usize)
+                            | ((b2 & QOI_OP_LONG_INDEX) as usize) << 6)
+                            .add((1 + QOI_OP_RUN_END - QOI_OP_RUN) as usize)
+                            .min(pixels.len());
+                        let (phead, ptail) = pixels.split_at_mut(run); // can't panic
+                        phead.fill(px.into());
+                        pixels = ptail;
                         data = dtail;
                         continue;
                     }
@@ -210,16 +211,6 @@ where
                 data.read_exact(&mut p)?;
                 let [b2] = p;
                 match b2 {
-                    _ if b2 & QOI_OP_LONG_RUN == QOI_OP_LONG_RUN => {
-                        *px_out = px.into();
-                        let run = (((b1 & 0x3f) as usize) << 4 | (b2 & QOI_OP_LONG_INDEX) as usize)
-                            .add((1 + QOI_OP_RUN_END - QOI_OP_RUN) as usize)
-                            .min(pixels.len());
-                        let (phead, ptail) = pixels.split_at_mut(run); // can't panic
-                        phead.fill(px.into());
-                        pixels = ptail;
-                        continue;
-                    }
                     _ if b2 & QOI_OP_LONG_INDEX == QOI_OP_LONG_INDEX => {
                         let hash_index =
                             (((b1 & 0x3f) as u16) << 4) | (((b2 & QOI_OP_LONG_RUN) as u16) >> 4);
@@ -228,6 +219,17 @@ where
                         // Move chosen l2 into l1 and evicted l1 into l2
                         let old_px_l1 = replace(state.index_l1(hash_index), px);
                         *state.index_l2(old_px_l1.hash_index()) = old_px_l1;
+                        continue;
+                    }
+                    _ if b2 & QOI_OP_LONG_RUN == QOI_OP_LONG_RUN => {
+                        *px_out = px.into();
+                        let run = (((b1 & 0x3f) as usize)
+                            | ((b2 & QOI_OP_LONG_INDEX) as usize) << 6)
+                            .add((1 + QOI_OP_RUN_END - QOI_OP_RUN) as usize)
+                            .min(pixels.len());
+                        let (phead, ptail) = pixels.split_at_mut(run); // can't panic
+                        phead.fill(px.into());
+                        pixels = ptail;
                         continue;
                     }
                     _ => {
