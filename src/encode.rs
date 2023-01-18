@@ -6,7 +6,10 @@ use std::io::Write;
 
 use bytemuck::Pod;
 
-use crate::consts::{QOI_HEADER_SIZE, QOI_OP_INDEX, QOI_OP_RUN, QOI_PADDING, QOI_PADDING_SIZE};
+use crate::consts::{
+    QOI_HEADER_SIZE, QOI_OP_INDEX, QOI_OP_LONG_INDEX, QOI_OP_LONG_RUN, QOI_OP_LUMA, QOI_OP_RUN,
+    QOI_PADDING, QOI_PADDING_SIZE,
+};
 use crate::error::{Error, Result};
 use crate::header::Header;
 use crate::pixel::{Pixel, SupportedChannels};
@@ -28,7 +31,7 @@ where
 
     let mut px_prev = Pixel::<4>::new().with_a(0xff);
     let mut hash_prev = px_prev.hash_index();
-    let mut run = 0_u8;
+    let mut run = 0_u16;
     let mut px = Pixel::<4>::new().with_a(0xff);
     let mut index_allowed = false;
 
@@ -38,8 +41,21 @@ where
         px.read(chunk);
         if px == px_prev {
             run += 1;
-            if run == 62 || unlikely(i == n_pixels - 1) {
-                buf = buf.write_one(QOI_OP_RUN | (run - 1))?;
+            if run == 1022 + 63 {
+                {
+                    let run = run - 63;
+                    buf = buf.write_one(QOI_OP_LUMA | (run >> 4) as u8)?;
+                    buf = buf.write_one(QOI_OP_LONG_RUN | run as u8 & 0x3f)?;
+                }
+                run = 0;
+            } else if unlikely(i == n_pixels - 1) {
+                if run <= 62 {
+                    buf = buf.write_one(QOI_OP_RUN | (run as u8 - 1))?;
+                } else {
+                    let run = run - 63;
+                    buf = buf.write_one(QOI_OP_LUMA | (run >> 4) as u8)?;
+                    buf = buf.write_one(QOI_OP_LONG_RUN | run as u8 & QOI_OP_LONG_INDEX)?;
+                }
                 run = 0;
             }
         } else {
@@ -47,15 +63,25 @@ where
                 #[cfg(not(feature = "reference"))]
                 {
                     // credits for the original idea: @zakarumych (had to be fixed though)
-                    buf = buf.write_one(if run == 1 && index_allowed {
-                        QOI_OP_INDEX | (hash_prev as u8 & 0x3f)
+                    if run == 1 && index_allowed {
+                        buf = buf.write_one(QOI_OP_INDEX | (hash_prev as u8 & 0x3f))?;
+                    } else if run <= 62 {
+                        buf = buf.write_one(QOI_OP_RUN | (run as u8 - 1))?;
                     } else {
-                        QOI_OP_RUN | (run - 1)
-                    })?;
+                        let run = run - 63;
+                        buf = buf.write_one(QOI_OP_LUMA | (run >> 4) as u8)?;
+                        buf = buf.write_one(QOI_OP_LONG_RUN | run as u8 & QOI_OP_LONG_INDEX)?;
+                    }
                 }
                 #[cfg(feature = "reference")]
                 {
-                    buf = buf.write_one(QOI_OP_RUN | (run - 1))?;
+                    if run <= 62 {
+                        buf = buf.write_one(QOI_OP_RUN | (run as u8 - 1))?;
+                    } else {
+                        let run = run - 63;
+                        buf = buf.write_one(QOI_OP_LUMA | (run >> 4) as u8)?;
+                        buf = buf.write_one(QOI_OP_LONG_RUN | run as u8 & QOI_OP_LONG_INDEX)?;
+                    }
                 }
                 run = 0;
             }

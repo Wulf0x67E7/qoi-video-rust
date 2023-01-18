@@ -3,8 +3,8 @@ mod common;
 use bytemuck::{cast_slice, Pod};
 
 use qoi::consts::{
-    QOI_HEADER_SIZE, QOI_OP_DIFF, QOI_OP_INDEX, QOI_OP_LUMA, QOI_OP_RGB, QOI_OP_RGBA, QOI_OP_RUN,
-    QOI_PADDING_SIZE,
+    QOI_HEADER_SIZE, QOI_OP_DIFF, QOI_OP_INDEX, QOI_OP_LONG_INDEX, QOI_OP_LONG_RUN, QOI_OP_LUMA,
+    QOI_OP_RGB, QOI_OP_RGBA, QOI_OP_RUN, QOI_PADDING_SIZE,
 };
 use qoi::{decode_to_vec, encode_to_vec};
 
@@ -60,25 +60,98 @@ fn test_encode_run_start_len1to62_4ch() {
 }
 
 #[test]
-fn test_encode_run_start_63to124_3ch() {
-    for n in 63..=124 {
+fn test_encode_run_start_63to1085_3ch() {
+    for n in 63..=1085 {
         let mut v = vec![[0, 0, 0]; n];
         v.push([11, 22, 33]);
-        test_chunk(v, [QOI_OP_RUN | 61, QOI_OP_RUN | (n as u8 - 63), QOI_OP_RGB]);
+        let n = n - 63;
+        test_chunk(
+            v,
+            [
+                QOI_OP_LUMA | (n >> 4) as u8,
+                QOI_OP_LONG_RUN | (n as u8 & QOI_OP_LONG_INDEX),
+                QOI_OP_RGB,
+                11,
+                22,
+                33,
+            ],
+        );
     }
 }
 
 #[test]
-fn test_encode_run_start_len63to124_4ch() {
-    for n in 63..=124 {
+fn test_encode_run_start_len63to1085_4ch() {
+    for n in 63..=1085 {
         let mut v = vec![[0, 0, 0, 0xff]; n];
         v.push([11, 22, 33, 44]);
-        test_chunk(v, [QOI_OP_RUN | 61, QOI_OP_RUN | (n as u8 - 63), QOI_OP_RGBA]);
+        let n = n - 63;
+        test_chunk(
+            v,
+            [
+                QOI_OP_LUMA | (n >> 4) as u8,
+                QOI_OP_LONG_RUN | (n as u8 & QOI_OP_LONG_INDEX),
+                QOI_OP_RGBA,
+                11,
+                22,
+                33,
+                44,
+            ],
+        );
     }
 }
 
 #[test]
-fn test_encode_run_end_3ch() {
+fn test_encode_run_long_end_3ch() {
+    let px = [11, 33, 55];
+    let mut v = vec![[1, 99, 2]];
+    const N: usize = 1042;
+    v.extend([px; N + 1]);
+    let n = N - 63;
+    test_chunk(
+        v,
+        [
+            QOI_OP_RGB,
+            1,
+            99,
+            2,
+            QOI_OP_RGB,
+            px[0],
+            px[1],
+            px[2],
+            QOI_OP_LUMA | (n >> 4) as u8,
+            QOI_OP_LONG_RUN | (n as u8 & QOI_OP_LONG_INDEX),
+        ],
+    );
+}
+
+#[test]
+fn test_encode_run_long_end_4ch() {
+    let px = [11, 33, 55, 77];
+    let mut v = vec![[1, 99, 2, 3]];
+    const N: usize = 1042;
+    v.extend([px; N + 1]);
+    let n = N - 63;
+    test_chunk(
+        v,
+        [
+            QOI_OP_RGBA,
+            1,
+            99,
+            2,
+            3,
+            QOI_OP_RGBA,
+            px[0],
+            px[1],
+            px[2],
+            px[3],
+            QOI_OP_LUMA | (n >> 4) as u8,
+            QOI_OP_LONG_RUN | (n as u8 & QOI_OP_LONG_INDEX),
+        ],
+    );
+}
+
+#[test]
+fn test_encode_run_short_end_3ch() {
     let px = [11, 33, 55];
     test_chunk(
         [[1, 99, 2], px, px, px],
@@ -87,7 +160,7 @@ fn test_encode_run_end_3ch() {
 }
 
 #[test]
-fn test_encode_run_end_4ch() {
+fn test_encode_run_short_end_4ch() {
     let px = [11, 33, 55, 77];
     test_chunk(
         [[1, 99, 2, 3], px, px, px],

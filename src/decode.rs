@@ -9,7 +9,7 @@ use std::io::Read;
 use bytemuck::{cast_slice_mut, Pod};
 
 use crate::consts::{
-    QOI_HEADER_SIZE, QOI_MASK_LONG_H, QOI_MASK_LONG_L, QOI_OP_DIFF, QOI_OP_INDEX, QOI_OP_LUMA,
+    QOI_HEADER_SIZE, QOI_OP_DIFF, QOI_OP_INDEX, QOI_OP_LONG_INDEX, QOI_OP_LONG_RUN, QOI_OP_LUMA,
     QOI_OP_RGB, QOI_OP_RGBA, QOI_OP_RUN, QOI_PADDING, QOI_PADDING_SIZE,
 };
 use crate::error::{Error, Result};
@@ -69,9 +69,9 @@ where
             }
             [b1 @ QOI_OP_LUMA..=QOI_OP_LUMA_END, b2, dtail @ ..] => {
                 match b2 {
-                    _ if b2 & QOI_MASK_LONG_H == QOI_MASK_LONG_H => {
+                    _ if b2 & QOI_OP_LONG_RUN == QOI_OP_LONG_RUN => {
                         *px_out = px.into();
-                        let run = (((b1 & 0x3f) as usize) << 4 | (b2 & QOI_MASK_LONG_L) as usize)
+                        let run = (((b1 & 0x3f) as usize) << 4 | (b2 & QOI_OP_LONG_INDEX) as usize)
                             .add((1 + QOI_OP_RUN_END - QOI_OP_RUN) as usize)
                             .min(pixels.len());
                         let (phead, ptail) = pixels.split_at_mut(run); // can't panic
@@ -80,9 +80,9 @@ where
                         data = dtail;
                         continue;
                     }
-                    _ if b2 & QOI_MASK_LONG_L == QOI_MASK_LONG_L => {
+                    _ if b2 & QOI_OP_LONG_INDEX == QOI_OP_LONG_INDEX => {
                         let hash_index =
-                            (((b1 & 0x3f) as u16) << 4) | (((b2 & QOI_MASK_LONG_H) as u16) >> 4);
+                            (((b1 & 0x3f) as u16) << 4) | (((b2 & QOI_OP_LONG_RUN) as u16) >> 4);
                         px = *state.index_l2(hash_index);
                         *px_out = px.into();
                         // Move chosen l2 into l1 and evicted l1 into l2
@@ -94,9 +94,9 @@ where
                     }
                     _ => {
                         px.update_luma(*b1, *b2);
+                        data = dtail;
                     }
                 }
-                data = dtail;
             }
             _ => {
                 cold();
@@ -210,9 +210,9 @@ where
                 data.read_exact(&mut p)?;
                 let [b2] = p;
                 match b2 {
-                    _ if b2 & QOI_MASK_LONG_H == QOI_MASK_LONG_H => {
+                    _ if b2 & QOI_OP_LONG_RUN == QOI_OP_LONG_RUN => {
                         *px_out = px.into();
-                        let run = (((b1 & 0x3f) as usize) << 4 | (b2 & QOI_MASK_LONG_L) as usize)
+                        let run = (((b1 & 0x3f) as usize) << 4 | (b2 & QOI_OP_LONG_INDEX) as usize)
                             .add((1 + QOI_OP_RUN_END - QOI_OP_RUN) as usize)
                             .min(pixels.len());
                         let (phead, ptail) = pixels.split_at_mut(run); // can't panic
@@ -220,9 +220,9 @@ where
                         pixels = ptail;
                         continue;
                     }
-                    _ if b2 & QOI_MASK_LONG_L == QOI_MASK_LONG_L => {
+                    _ if b2 & QOI_OP_LONG_INDEX == QOI_OP_LONG_INDEX => {
                         let hash_index =
-                            (((b1 & 0x3f) as u16) << 4) | (((b2 & QOI_MASK_LONG_H) as u16) >> 4);
+                            (((b1 & 0x3f) as u16) << 4) | (((b2 & QOI_OP_LONG_RUN) as u16) >> 4);
                         px = *state.index_l2(hash_index);
                         *px_out = px.into();
                         // Move chosen l2 into l1 and evicted l1 into l2
