@@ -9,8 +9,9 @@ use std::io::Read;
 use bytemuck::{cast_slice_mut, Pod};
 
 use crate::consts::{
-    QOI_HEADER_SIZE, QOI_OP_DIFF, QOI_OP_INDEX, QOI_OP_LONG_INDEX, QOI_OP_LONG_RUN, QOI_OP_LUMA,
-    QOI_OP_PREV, QOI_OP_RGB, QOI_OP_RGBA, QOI_OP_RUN, QOI_PADDING, QOI_PADDING_SIZE,
+    QOI_HEADER_SIZE, QOI_OP_DIFF, QOI_OP_INDEX, QOI_OP_LONG_INDEX, QOI_OP_LONG_RUN,
+    QOI_OP_LONG_RUN_MAX_0, QOI_OP_LONG_RUN_MAX_1, QOI_OP_LUMA, QOI_OP_PREV, QOI_OP_RGB,
+    QOI_OP_RGBA, QOI_OP_RUN, QOI_PADDING, QOI_PADDING_SIZE,
 };
 use crate::error::{Error, Result};
 use crate::header::Header;
@@ -72,37 +73,42 @@ where
                 px.update_diff(*b1);
                 data = dtail;
             }
+            [b1 @ QOI_OP_LUMA..=QOI_OP_LUMA_END, b2, dtail @ ..]
+                if b2 & QOI_OP_LONG_INDEX == QOI_OP_LONG_INDEX =>
+            {
+                let hash_index = ((b1 & 0x3f) as u16) | ((b2 & QOI_OP_LONG_RUN) as u16) << 2;
+                px = *state.index_l2(hash_index);
+                *px_out = px.into();
+                let old_px_l1 = replace(state.index_l1(hash_index), px);
+                *state.index_l2(old_px_l1.hash_index()) = old_px_l1;
+                data = dtail;
+                continue;
+            }
+            [b1 @ QOI_OP_LUMA..=QOI_OP_LUMA_END, b2, dtail @ ..]
+                if b2 & QOI_OP_LONG_RUN == QOI_OP_LONG_RUN =>
+            {
+                *px_out = px.into();
+                let run = (((b1 & 0x3f) as usize) | ((b2 & QOI_OP_LONG_INDEX) as usize) << 6)
+                    .add((2 + QOI_OP_RUN_END - QOI_OP_RUN) as usize)
+                    .min(pixels.len());
+                let (phead, ptail) = pixels.split_at_mut(run); // can't panic
+                phead.fill(px.into());
+                pixels = ptail;
+                data = dtail;
+                continue;
+            }
+            [QOI_OP_LONG_RUN_MAX_0, QOI_OP_LONG_RUN_MAX_1, dtail @ ..] => {
+                *px_out = px.into();
+                let run = 1023.min(pixels.len());
+                let (phead, ptail) = pixels.split_at_mut(run); // can't panic
+                phead.fill(px.into());
+                pixels = ptail;
+                data = dtail;
+                continue;
+            }
             [b1 @ QOI_OP_LUMA..=QOI_OP_LUMA_END, b2, dtail @ ..] => {
-                match b2 {
-                    _ if b2 & QOI_OP_LONG_INDEX == QOI_OP_LONG_INDEX => {
-                        let hash_index =
-                            ((b1 & 0x3f) as u16) | ((b2 & QOI_OP_LONG_RUN) as u16) << 2;
-                        px = *state.index_l2(hash_index);
-                        *px_out = px.into();
-                        // Move chosen l2 into l1 and evicted l1 into l2
-                        let old_px_l1 = replace(state.index_l1(hash_index), px);
-                        *state.index_l2(old_px_l1.hash_index()) = old_px_l1;
-                        // cleanup
-                        data = dtail;
-                        continue;
-                    }
-                    _ if b2 & QOI_OP_LONG_RUN == QOI_OP_LONG_RUN => {
-                        *px_out = px.into();
-                        let run = (((b1 & 0x3f) as usize)
-                            | ((b2 & QOI_OP_LONG_INDEX) as usize) << 6)
-                            .add((2 + QOI_OP_RUN_END - QOI_OP_RUN) as usize)
-                            .min(pixels.len());
-                        let (phead, ptail) = pixels.split_at_mut(run); // can't panic
-                        phead.fill(px.into());
-                        pixels = ptail;
-                        data = dtail;
-                        continue;
-                    }
-                    _ => {
-                        px.update_luma(*b1, *b2);
-                        data = dtail;
-                    }
-                }
+                px.update_luma(*b1, *b2);
+                data = dtail;
             }
             _ => {
                 cold();
@@ -236,6 +242,14 @@ where
                             | ((b2 & QOI_OP_LONG_INDEX) as usize) << 6)
                             .add((2 + QOI_OP_RUN_END - QOI_OP_RUN) as usize)
                             .min(pixels.len());
+                        let (phead, ptail) = pixels.split_at_mut(run); // can't panic
+                        phead.fill(px.into());
+                        pixels = ptail;
+                        continue;
+                    }
+                    QOI_OP_LONG_RUN_MAX_1 if b1 == QOI_OP_LONG_RUN_MAX_0 => {
+                        *px_out = px.into();
+                        let run = 1023.min(pixels.len());
                         let (phead, ptail) = pixels.split_at_mut(run); // can't panic
                         phead.fill(px.into());
                         pixels = ptail;

@@ -8,8 +8,8 @@ use std::io::Write;
 use bytemuck::Pod;
 
 use crate::consts::{
-    QOI_HEADER_SIZE, QOI_OP_INDEX, QOI_OP_LONG_INDEX, QOI_OP_LONG_RUN, QOI_OP_LUMA, QOI_OP_PREV,
-    QOI_OP_RUN, QOI_PADDING, QOI_PADDING_SIZE,
+    QOI_HEADER_SIZE, QOI_OP_INDEX, QOI_OP_LONG_INDEX, QOI_OP_LONG_RUN, QOI_OP_LONG_RUN_MAX_0,
+    QOI_OP_LONG_RUN_MAX_1, QOI_OP_LUMA, QOI_OP_PREV, QOI_OP_RUN, QOI_PADDING, QOI_PADDING_SIZE,
 };
 use crate::error::{Error, Result};
 use crate::header::Header;
@@ -40,12 +40,9 @@ where
         px.read(chunk);
         if px == px_prev {
             run += 1;
-            if run == 959 + 64 {
-                {
-                    let run = run - 64;
-                    buf = buf.write_one(QOI_OP_LUMA | (run & 0x3f) as u8)?;
-                    buf = buf.write_one(QOI_OP_LONG_RUN | (run >> 6) as u8)?;
-                }
+            if run == 1024 {
+                buf = buf.write_one(QOI_OP_LONG_RUN_MAX_0)?;
+                buf = buf.write_one(QOI_OP_LONG_RUN_MAX_1)?;
                 run = 0;
             } else if unlikely(i == n_pixels - 1) {
                 if run == 1 {
